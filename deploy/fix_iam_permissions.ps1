@@ -25,4 +25,12 @@ Write-Host "===> Granting storage and build permissions to service accounts..." 
     --condition=None `
     --quiet
 
+# Grant aiplatform.user so Cloud Run can invoke Gemini 2.5 on Vertex AI
+Write-Host "===> Granting Vertex AI User permission to Cloud Run service account..." -ForegroundColor Yellow
+& $gcloudCmd projects add-iam-policy-binding $ProjectId `
+    --member="serviceAccount:$ComputeSA" `
+    --role="roles/aiplatform.user" `
+    --condition=None `
+    --quiet
+
 Write-Host "[+] Permissions updated successfully!" -ForegroundColor Green
