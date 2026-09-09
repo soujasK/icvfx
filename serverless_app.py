@@ -178,6 +178,28 @@ async def custom_diagnose(request: Request):
     if body.get("render_frozen") is not None:
         args.extend(["--render_frozen", str(body["render_frozen"])])
 
+    # Handle image upload or path for PNG snapshot mode
+    img_b64 = body.get("image_base64")
+    if img_b64 and isinstance(img_b64, str):
+        try:
+            b64_data = re.sub(r"^data:image/\w+;base64,", "", img_b64)
+            buf = base64.b64decode(b64_data)
+            upload_dir = REPO_ROOT / "dashboard" / "public" / "runs" / "uploads"
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            upload_path = upload_dir / f"custom_snapshot_{int(time.time()*1000)}.png"
+            with open(upload_path, "wb") as f:
+                f.write(buf)
+            args.extend(["--witness_image", str(upload_path)])
+        except Exception as e:
+            print("Snapshot upload decode warning:", e)
+    elif body.get("image_path"):
+        raw_p = str(body["image_path"]).lstrip("/\\")
+        candidate = REPO_ROOT / raw_p
+        if not candidate.exists():
+            candidate = REPO_ROOT / "dashboard" / "public" / raw_p
+        if candidate.exists():
+            args.extend(["--witness_image", str(candidate)])
+
     proc = subprocess.run(args, cwd=str(REPO_ROOT), capture_output=True, text=True)
     try:
         import re

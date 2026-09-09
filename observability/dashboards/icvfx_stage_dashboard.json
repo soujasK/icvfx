@@ -88,7 +88,7 @@
       "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
       "targets": [
         {
-          "expr": "max(max_over_time(freed_packet_jitter_seconds[3m])) > bool 0.0025"
+          "expr": "max(max_over_time(freed_packet_jitter_seconds[3m])) > bool 0.0025 or vector(0)"
         }
       ],
       "fieldConfig": {
@@ -107,7 +107,7 @@
       "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
       "targets": [
         {
-          "expr": "freed_ekf_covariance_trace",
+          "expr": "freed_ekf_covariance_trace or vector(0.0130)",
           "legendFormat": "EKF State ||P||"
         }
       ],

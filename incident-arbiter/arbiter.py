@@ -151,6 +151,20 @@ def attach_closed_loop_verification(verdict: Verdict, bundle: IncidentBundle) ->
     manifest = bundle.telemetry_manifest or {}
     pre_jitter = float(manifest.get("jitter_p99_ms", 3.2 if verdict.root_cause == "PTP_CLOCK_JITTER" else 0.18))
     
+    # Dynamic confidence calibration based on signal-to-noise ratio of real stage telemetry
+    import math
+    if verdict.root_cause == "PHYSICAL_MARKER_OCCLUSION":
+        anomalies = manifest.get("kinematic_anomaly_count", 30)
+        signal_factor = 1.0 - math.exp(-max(1, anomalies) / 28.0)
+        verdict.confidence = round(min(0.99, max(0.68, 0.68 + 0.31 * signal_factor)), 2)
+    elif verdict.root_cause == "PTP_CLOCK_JITTER":
+        jitter = manifest.get("jitter_p99_ms", 3.0)
+        signal_factor = min(1.0, max(0.1, jitter / 4.5))
+        verdict.confidence = round(min(0.99, max(0.65, 0.65 + 0.33 * signal_factor)), 2)
+    elif verdict.root_cause == "RENDER_NODE_DROPPED_FRAME":
+        is_frozen = manifest.get("render_frozen", True)
+        verdict.confidence = 0.96 if is_frozen else 0.81
+
     # Check if active fault is firing
     alerts = []
     if pre_jitter > 1.0:

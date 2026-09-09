@@ -20,12 +20,18 @@ try:
 except ImportError:
     pass
 
-from mcp_client import RemediationClient
+try:
+    from mcp_client import RemediationClient
+except ImportError:
+    RemediationClient = None
+
 from arbiter import IncidentBundle, build_arbiter
 from synthetic_frames import generate_incident_frames
 
 
 async def run_mcp_tool(tool_name: str, arguments: dict):
+    if RemediationClient is None:
+        return {"ok": False, "error": "mcp library not available in environment"}
     async with RemediationClient() as client:
         res = await client.call(tool_name, arguments)
         return {

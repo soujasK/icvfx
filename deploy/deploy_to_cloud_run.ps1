@@ -41,6 +41,14 @@ if (Test-Path "dashboard/dist") {
 # Step 2: Deploy to Cloud Run
 Write-Host "===> [2/2] Deploying container to Google Cloud Run (Building via Cloud Build)..." -ForegroundColor Yellow
 
+if (-not $env:GRAFANA_CLOUD_API_KEY -and (Test-Path ".env")) {
+    $lines = Get-Content ".env"
+    foreach ($line in $lines) {
+        if ($line -match '^\s*GRAFANA_CLOUD_API_KEY\s*=\s*(.+)$') {
+            $env:GRAFANA_CLOUD_API_KEY = $matches[1].Trim()
+        }
+    }
+}
 $grafanaKey = if ($env:GRAFANA_CLOUD_API_KEY) { $env:GRAFANA_CLOUD_API_KEY } else { "YOUR_GRAFANA_CLOUD_API_KEY" }
 $envVars = "GEMINI_BACKEND=vertex,GOOGLE_CLOUD_PROJECT=$ProjectId,GOOGLE_CLOUD_LOCATION=$Region,GEMINI_MODEL=gemini-2.5-flash,GRAFANA_CLOUD_REMOTE_WRITE_URL=https://prometheus-prod-43-prod-ap-south-1.grafana.net/api/prom/push,GRAFANA_CLOUD_USER=3572064,GRAFANA_CLOUD_API_KEY=$grafanaKey"
 

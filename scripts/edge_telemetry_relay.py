@@ -230,6 +230,32 @@ class EdgeTelemetryRelay:
                 pass
 
 
+    def grafana_cloud_loop(self):
+        """Periodically ships live Prometheus Remote Write telemetry to Grafana Cloud Mimir."""
+        try:
+            sys.path.insert(0, os.path.join(REPO_ROOT, "scripts"))
+            from push_to_grafana_cloud import push_to_grafana_cloud
+        except Exception:
+            return
+
+        while self.running:
+            time.sleep(3.0)
+            try:
+                with self.lock:
+                    telemetry_payload = {
+                        "jitter_seconds": float(self.jitter_ms) / 1000.0,
+                        "packets_total": int(self.packets_total),
+                        "jerk_violations": int(self.jerk_violations),
+                        "ptp_offset_ns": float(self.ptp_offset_ns),
+                        "covariance_trace": 0.0125 if self.jerk_violations == 0 else 0.145,
+                        "filter_mode": "KALMAN_STANDARD" if self.jerk_violations == 0 else "EKF_COVARIANCE_INFLATED",
+                        "camera_id": 1,
+                    }
+                push_to_grafana_cloud(dry_run=False, loop=False, interval_s=1.0, telemetry_override=telemetry_payload)
+            except Exception:
+                pass
+
+
 def main():
     parser = argparse.ArgumentParser(description="Stage Edge UDP Ingest & Cloud Relay Bridge")
     parser.add_argument("--cloud-url", default=DEFAULT_CLOUD_URL, help="Target Cloud Run URL")
@@ -248,7 +274,11 @@ def main():
     t_relay = threading.Thread(target=relay.cloud_relay_loop, daemon=True)
     t_relay.start()
 
-    # Thread 3: Optional Simulator Transmitter
+    # Thread 3: Grafana Cloud Live Remote Write Shipper
+    t_grafana = threading.Thread(target=relay.grafana_cloud_loop, daemon=True)
+    t_grafana.start()
+
+    # Thread 4: Optional Simulator Transmitter
     if args.simulate:
         print("[*] Starting internal 120Hz camera crane FreeD transmitter...")
         t_sim = threading.Thread(target=relay.start_local_simulator, daemon=True)

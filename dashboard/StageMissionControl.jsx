@@ -436,6 +436,7 @@ export default function StageMissionControl() {
             summary: directorNotes,
             prompt: directorNotes,
             image_base64: inputMediaSrc.startsWith("data:image") ? inputMediaSrc : undefined,
+            image_path: inputMediaSrc.startsWith("/") ? `dashboard/public${inputMediaSrc}` : undefined,
           }),
         });
 
