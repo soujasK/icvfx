@@ -1,0 +1,52 @@
+# OpenTelemetry Collector config for the ICVFX stage sync fabric.
+#
+# Receives OTLP traces from the C++ ingest daemons (Phase 1's
+# "OpenTelemetry C++ Instrumentation" / W3C traceparent injection) and the
+# Java telemetry mesh, forwarding spans to Grafana Tempo and structured logs
+# (C++ assertion panics, network-switch dropped-packet warnings) to Grafana
+# Loki, per Phase 3.
+#
+# NOTE: the Sprint 1 C++ daemon in this repo generates W3C traceparent
+# values by hand and writes them into its JSONL output rather than linking
+# the real opentelemetry-cpp SDK (see cpp-core/src/common.hpp for why). A
+# production build replaces that with a real OTLP exporter pointed at this
+# collector's 4317 endpoint; nothing else in this file changes.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+  attributes/stage:
+    actions:
+      - key: stage.subsystem
+        value: icvfx-tracker-sync
+        action: upsert
+
+exporters:
+  otlp/tempo:
+    endpoint: ${GRAFANA_CLOUD_TEMPO_ENDPOINT}
+    headers:
+      authorization: "Basic ${GRAFANA_CLOUD_TEMPO_BASIC_AUTH}"
+  loki:
+    endpoint: ${GRAFANA_CLOUD_LOKI_PUSH_ENDPOINT}
+    headers:
+      authorization: "Basic ${GRAFANA_CLOUD_LOKI_BASIC_AUTH}"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [attributes/stage, batch]
+      exporters: [otlp/tempo]
+    logs:
+      receivers: [otlp]
+      processors: [attributes/stage, batch]
+      exporters: [loki]

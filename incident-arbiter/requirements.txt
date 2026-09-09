@@ -1,0 +1,12 @@
+# Real Gemini 2.5 Pro path (Vertex AI backend). Requires
+# GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION env vars and application
+# default credentials (gcloud auth application-default login) or a service
+# account key. Google's Python SDK surface for Gemini has moved more than
+# once (google-cloud-aiplatform's `vertexai` module -> the newer unified
+# `google-genai` client) - pin/verify against current docs before a real
+# deployment; this repo's GeminiArbiter targets `google-genai`.
+google-genai>=1.0.0
+
+# Synthetic witness-camera / frustum-buffer frame generation for the offline
+# demo path (no real stage cameras or Unreal render node available).
+Pillow>=10.0.0

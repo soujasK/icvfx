@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Secrets / local config
+.env
+*.env
+!*.env.example
+stage_agent/.env
+gcp-key*.json
+*-sa-key.json
+
+# Node
+node_modules/
+dashboard/dist/
+
+# Build artifacts
+cpp-core/bin/
+cpp-core/tests/test_codec
+telemetry-mesh/target/
+
+# Local run output (regenerated)
+runs/custom/
+dashboard/public/videos/processed/
+dashboard/public/videos/uploads/
+dashboard/public/runs/custom/
+mcp-remediation/stage_state.json

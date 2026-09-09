@@ -1,0 +1,18 @@
+.git
+.gitignore
+.gitattributes
+node_modules/
+dashboard/node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+cpp-core/bin/
+cpp-core/tests/test_codec
+telemetry-mesh/target/
+
+# Include dashboard distribution build explicitly
+!dashboard/dist
+!dashboard/dist/**

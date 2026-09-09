@@ -1,0 +1,22 @@
+{
+  "name": "dashboard",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A standalone incident-summary dashboard for stage crew, built alongside (not instead of) the Grafana Cloud observability layer in `../observability/`. Grafana remains the system of record for metric history, P95/P99 jitter trends, and alert routing (see `../docs/ROADMAP.md`, Sprint 3). This page answers a narrower question at a glance: *what happened, what did the system diagnose, and what did it do about it* — pulling from the same real incident reports and stage state the rest of this repo produces (`runs/*/incident_report.json`, `mcp-remediation/stage_state.json`).",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "lucide-react": "^1.43.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "recharts": "^3.10.1",
+    "vite": "^8.2.2"
+  }
+}

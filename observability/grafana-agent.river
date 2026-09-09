@@ -1,0 +1,25 @@
+// Grafana Agent (Flow mode) config.
+// Scrapes the Sprint 2 telemetry mesh's Actuator/Prometheus endpoint and
+// remote_write's to Grafana Cloud Mimir, per Phase 2's "Prometheus
+// Remote-Write Exporter" requirement. Run alongside the telemetry-mesh
+// service: `grafana-agent run grafana-agent.river`.
+
+prometheus.scrape "telemetry_mesh" {
+  targets = [
+    {"__address__" = env("TELEMETRY_MESH_ADDR") != "" ? env("TELEMETRY_MESH_ADDR") : "localhost:8080"},
+  ]
+  metrics_path   = "/actuator/prometheus"
+  scrape_interval = "1s"   // per Phase 3: "Metric scraping at 1s intervals"
+  forward_to     = [prometheus.remote_write.mimir.receiver]
+}
+
+prometheus.remote_write "mimir" {
+  endpoint {
+    url = env("GRAFANA_CLOUD_MIMIR_REMOTE_WRITE_URL")
+
+    basic_auth {
+      username = env("GRAFANA_CLOUD_MIMIR_USER")
+      password = env("GRAFANA_CLOUD_API_KEY")
+    }
+  }
+}

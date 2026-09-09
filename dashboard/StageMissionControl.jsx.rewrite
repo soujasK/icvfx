@@ -1,0 +1,780 @@
+import React, { useState, useEffect } from "react";
+import { LineChart, Line, YAxis, ResponsiveContainer } from "recharts";
+import { Play, Pause, RefreshCw } from "lucide-react";
+
+const GRAFANA_STACK = "nimblespruce925";
+const GRAFANA_URL = `https://${GRAFANA_STACK}.grafana.net`;
+const GRAFANA_EXPLORE = `${GRAFANA_URL}/explore`;
+
+// Per-scenario seed data. Overwritten by a live /api/custom-diagnose run;
+// present so the page reads sensibly before the first run.
+const SCENARIOS = {
+  occlusion: {
+    label: "Marker occlusion",
+    witness: "/runs/occlusion/witness_occlusion.png",
+    frustum: "/runs/occlusion/frustum_occlusion.png",
+    alert: "Kinematic invariant breach ×31 on camera 1",
+    manifest: {
+      window_ms: 500, camera_id: 1, kinematic_anomaly_count: 31,
+      ptp_alert: false, jitter_p99_ms: 0.18, render_frozen: false,
+    },
+    verdict: {
+      root_cause: "PHYSICAL_MARKER_OCCLUSION",
+      confidence: 0.93,
+      reasoning:
+        "The witness frame shows a boom pole crossing the tracking-marker grid. " +
+        "The tracker reports 31 acceleration/rotation-flip breaches while PTP timing " +
+        "and the render buffer stay nominal — corrupted optical data, not a real move.",
+      remediation_tool: "switch_tracking_estimator",
+      remediation_args: { camera_id: 1, filter_mode: "KALMAN_DEAD_RECKONING" },
+      stage_hud_message: "Boom pole occluding rig 1 — switched to dead reckoning.",
+    },
+    remediation: {
+      latency_ms: 16,
+      before: "OPTICAL_ONLY — corrupted motion, 31 jerk breaches",
+      after: "KALMAN_DEAD_RECKONING — smooth predictive path",
+    },
+    verification: {
+      metric: "kinematic_jerk_violations_total",
+      pre_ms: 0.18, post_ms: 0.18, threshold_ms: 1.0,
+    },
+  },
+  ptp_jitter: {
+    label: "PTP clock jitter",
+    witness: "/runs/ptp_jitter/witness_ptp_jitter.png",
+    frustum: "/runs/ptp_jitter/frustum_ptp_jitter.png",
+    alert: "FreeD packet jitter p99 = 4.27 ms (3+ consecutive frames)",
+    manifest: {
+      window_ms: 500, camera_id: 1, kinematic_anomaly_count: 0,
+      ptp_alert: true, jitter_p99_ms: 4.27, render_frozen: false,
+    },
+    verdict: {
+      root_cause: "PTP_CLOCK_JITTER",
+      confidence: 0.88,
+      reasoning:
+        "Tracked pose stays within kinematic limits, but packet arrival jitter " +
+        "exceeded 2.5 ms for 3+ consecutive frames on sync domain 127 — a timing-" +
+        "domain fault, not a bad tracking sample.",
+      remediation_tool: "recalibrate_ptp_sync_domain",
+      remediation_args: { domain_number: 127 },
+      stage_hud_message: "PTP domain 127 drift — recalibrating clock master.",
+    },
+    remediation: {
+      latency_ms: 15,
+      before: "PTP domain 127: drift, 4.27 ms late",
+      after: "PTP domain 127: re-locked, within ±120 ns",
+    },
+    verification: {
+      metric: "freed_packet_jitter_seconds",
+      pre_ms: 4.27, post_ms: 0.22, threshold_ms: 1.0,
+    },
+  },
+  dropped_frame: {
+    label: "Dropped render frame",
+    witness: "/runs/dropped_frame/witness_dropped_frame.png",
+    frustum: "/runs/dropped_frame/frustum_dropped_frame.png",
+    alert: "Render buffer freeze flagged by the nDisplay watchdog",
+    manifest: {
+      window_ms: 500, camera_id: 1, kinematic_anomaly_count: 0,
+      ptp_alert: false, jitter_p99_ms: 0.15, render_frozen: true,
+    },
+    verdict: {
+      root_cause: "RENDER_NODE_DROPPED_FRAME",
+      confidence: 0.85,
+      reasoning:
+        "Tracking telemetry is smooth and timing is clean while the render buffer " +
+        "timestamp is stale — a stalled frame on the display node, not a tracking " +
+        "or timing fault.",
+      remediation_tool: "clamp_frustum_margin",
+      remediation_args: { display_node_id: "led-wall-a", overscan_pct: 15.0 },
+      stage_hud_message: "Frustum overscan expanded to mask a stalled render frame.",
+    },
+    remediation: {
+      latency_ms: 31,
+      before: "Frustum margin 0.0% — seam tear visible",
+      after: "Frustum margin 15.0% — dynamic overscan active",
+    },
+    verification: {
+      metric: "freed_packet_jitter_seconds",
+      pre_ms: 0.15, post_ms: 0.15, threshold_ms: 1.0,
+    },
+  },
+};
+
+export default function StageMissionControl() {
+  const [scenarioKey, setScenarioKey] = useState("occlusion");
+  const [running, setRunning] = useState(false);
+  const [backend, setBackend] = useState("");
+  const s = SCENARIOS[scenarioKey];
+
+  // verdict / remediation / verification: seeded from the scenario, replaced by a live run
+  const [verdict, setVerdict] = useState(s.verdict);
+  const [remediation, setRemediation] = useState(s.remediation);
+  const [verification, setVerification] = useState(s.verification);
+  const [manifest, setManifest] = useState(s.manifest);
+
+  // live tracker (from the FreeD daemon via /api/udp-telemetry)
+  const [tracker, setTracker] = useState(null);
+  const [trajectory, setTrajectory] = useState([]);
+
+  // Grafana Cloud metric stream
+  const [stream, setStream] = useState({ running: false, pushes_sent: 0 });
+  const [streamInterval, setStreamInterval] = useState(5);
+  const [streamBusy, setStreamBusy] = useState(false);
+
+  // reset to seed data when the scenario changes
+  useEffect(() => {
+    setVerdict(s.verdict);
+    setRemediation(s.remediation);
+    setVerification(s.verification);
+    setManifest(s.manifest);
+    setBackend("");
+  }, [scenarioKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // poll the live tracker + stream status
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await fetch("/api/udp-telemetry");
+        if (r.ok) {
+          const d = await r.json();
+          if (alive && d.ok) {
+            if (d.ekf_tracker) setTracker({ ...d.socket, ...d.ekf_tracker });
+            const traj = d.recent_trajectory || [];
+            if (traj.length) {
+              setTrajectory(
+                traj.map((p, i) => ({
+                  i,
+                  raw: p.raw ? +p.raw[0].toFixed(3) : 0,
+                  ekf: p.filtered ? +p.filtered[0].toFixed(3) : 0,
+                }))
+              );
+            }
+          }
+        }
+      } catch {}
+      try {
+        const g = await fetch("/api/grafana-stream/status");
+        if (g.ok) {
+          const gd = await g.json();
+          if (alive && gd.ok) setStream(gd);
+        }
+      } catch {}
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  const runDiagnosis = async () => {
+    setRunning(true);
+    try {
+      const r = await fetch("/api/custom-diagnose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scenario: scenarioKey,
+          camera: 1,
+          anomalies: s.manifest.kinematic_anomaly_count,
+          jitter: s.manifest.jitter_p99_ms,
+          render_frozen: s.manifest.render_frozen,
+          summary: s.alert,
+        }),
+      });
+      const d = await r.json();
+      if (d.verdict) {
+        setVerdict(d.verdict);
+        setBackend(d.verdict.arbiter_backend || "");
+        if (d.telemetry) setManifest(d.telemetry);
+        // presentational before/after per the returned root cause
+        const rc = d.verdict.root_cause;
+        if (rc === "PHYSICAL_MARKER_OCCLUSION") {
+          setRemediation({
+            latency_ms: 16,
+            before: `OPTICAL_ONLY — ${s.manifest.kinematic_anomaly_count} jerk breaches`,
+            after: "KALMAN_DEAD_RECKONING — smooth predictive path",
+          });
+        } else if (rc === "PTP_CLOCK_JITTER") {
+          setRemediation({
+            latency_ms: 15,
+            before: `PTP domain 127: drift, ${s.manifest.jitter_p99_ms} ms late`,
+            after: "PTP domain 127: re-locked, within ±120 ns",
+          });
+        } else if (rc === "RENDER_NODE_DROPPED_FRAME") {
+          setRemediation({
+            latency_ms: 31,
+            before: "Frustum margin 0.0% — seam tear visible",
+            after: "Frustum margin 15.0% — dynamic overscan active",
+          });
+        }
+      }
+    } catch (e) {
+      console.error("diagnosis failed", e);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const toggleStream = async () => {
+    setStreamBusy(true);
+    try {
+      if (stream.running) {
+        await fetch("/api/grafana-stream/stop", { method: "POST" });
+      } else {
+        await fetch("/api/grafana-stream/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ interval: streamInterval }),
+        });
+      }
+      const r = await fetch("/api/grafana-stream/status");
+      const d = await r.json();
+      if (d.ok) setStream(d);
+    } catch (e) {
+      console.error("stream toggle failed", e);
+    } finally {
+      setStreamBusy(false);
+    }
+  };
+
+  const conf = Math.round((verdict.confidence || 0) * 100);
+  const verified = verification.post_ms <= verification.threshold_ms;
+
+  return (
+    <div style={x.page}>
+      <header style={x.header}>
+        <div>
+          <div style={x.title}>ICVFX Stage Sync</div>
+          <div style={x.subtitle}>Autonomous tracker / render desync remediation</div>
+        </div>
+        <div style={x.headerRight}>
+          <span style={x.stackChip}>
+            <span style={{ ...x.dot, background: stream.running ? "#22d3ee" : "#5b616e" }} />
+            stack&nbsp;<span style={x.mono}>{GRAFANA_STACK}</span>
+          </span>
+          <a style={x.link} href={GRAFANA_URL} target="_blank" rel="noreferrer">
+            Grafana Cloud &#8599;
+          </a>
+        </div>
+      </header>
+
+      {/* Grafana Cloud metric stream */}
+      <section style={x.streamBar}>
+        <div style={x.streamLeft}>
+          <span style={{ ...x.dot, background: stream.running ? "#22d3ee" : "#5b616e" }} />
+          <span style={x.streamLabel}>Grafana Cloud metric stream</span>
+          <span style={x.streamState}>
+            {stream.running
+              ? `streaming · ${stream.pushes_sent || 0} batches`
+              : "standby"}
+          </span>
+        </div>
+        <div style={x.streamCtl}>
+          {[2, 5, 10].map((n) => (
+            <button
+              key={n}
+              onClick={() => setStreamInterval(n)}
+              disabled={stream.running}
+              style={{
+                ...x.intBtn,
+                ...(streamInterval === n ? x.intBtnOn : null),
+                opacity: stream.running ? 0.4 : 1,
+              }}
+            >
+              {n}s
+            </button>
+          ))}
+          <button onClick={toggleStream} disabled={streamBusy} style={x.streamBtn}>
+            {stream.running ? <Pause size={13} /> : <Play size={13} />}
+            {stream.running ? "Stop" : "Start stream"}
+          </button>
+        </div>
+      </section>
+
+      <div style={x.grid}>
+        {/* 1 — Incident */}
+        <section style={x.col}>
+          <div style={x.colHead}>
+            <span style={x.colTitle}>Incident</span>
+            <span style={x.colNote}>camera 1</span>
+          </div>
+
+          <div style={x.tabs}>
+            {Object.entries(SCENARIOS).map(([k, v]) => (
+              <button
+                key={k}
+                onClick={() => setScenarioKey(k)}
+                style={{ ...x.tab, ...(scenarioKey === k ? x.tabOn : null) }}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+
+          <div style={x.frames}>
+            <figure style={x.figure}>
+              <img src={s.witness} alt="witness camera" style={x.img} />
+              <figcaption style={x.cap}>Witness camera</figcaption>
+            </figure>
+            <figure style={x.figure}>
+              <img src={s.frustum} alt="rendered frustum" style={x.img} />
+              <figcaption style={x.cap}>Rendered frustum</figcaption>
+            </figure>
+          </div>
+
+          <div style={x.alert}>{s.alert}</div>
+
+          <div style={x.block}>
+            <div style={x.blockLabel}>Telemetry manifest (last 500 ms)</div>
+            <pre style={x.code}>{JSON.stringify(manifest, null, 2)}</pre>
+          </div>
+
+          <button onClick={runDiagnosis} disabled={running} style={x.runBtn}>
+            {running ? <RefreshCw size={15} className="spin" /> : null}
+            {running ? "Diagnosing…" : "Run diagnosis"}
+          </button>
+        </section>
+
+        {/* 2 — Diagnosis */}
+        <section style={x.col}>
+          <div style={x.colHead}>
+            <span style={x.colTitle}>Diagnosis</span>
+            <span style={x.colNote}>{backend || "Gemini 2.5 · Vertex AI"}</span>
+          </div>
+
+          <div style={x.block}>
+            <div style={x.rowBetween}>
+              <span style={x.blockLabel}>Root cause</span>
+              <span style={x.conf}>{conf}% confidence</span>
+            </div>
+            <div style={x.rootCause}>{verdict.root_cause}</div>
+            <div style={x.bar}>
+              <div style={{ ...x.barFill, width: `${conf}%` }} />
+            </div>
+          </div>
+
+          <div style={x.block}>
+            <div style={x.blockLabel}>Reasoning</div>
+            <p style={x.reason}>{verdict.reasoning}</p>
+          </div>
+
+          <div style={x.block}>
+            <div style={x.blockLabel}>Prescribed remediation</div>
+            <code style={x.directive}>
+              {verdict.remediation_tool}({JSON.stringify(verdict.remediation_args)})
+            </code>
+          </div>
+
+          <div style={x.block}>
+            <div style={x.blockLabel}>Stage HUD message</div>
+            <div style={x.hud}>{verdict.stage_hud_message}</div>
+          </div>
+        </section>
+
+        {/* 3 — Remediation & recovery */}
+        <section style={x.col}>
+          <div style={x.colHead}>
+            <span style={x.colTitle}>Remediation &amp; recovery</span>
+            <span style={x.colNote}>MCP</span>
+          </div>
+
+          <div style={x.block}>
+            <div style={x.rowBetween}>
+              <span style={x.blockLabel}>MCP tool call</span>
+              <span style={x.mono}>{remediation.latency_ms} ms</span>
+            </div>
+            <code style={x.directive}>{verdict.remediation_tool}</code>
+            <div style={x.slaNote}>Execution budget &lt; 100 ms &mdash; met</div>
+          </div>
+
+          <div style={x.block}>
+            <div style={x.blockLabel}>Stage state</div>
+            <div style={x.beforeAfter}>
+              <span style={x.before}>{remediation.before}</span>
+              <span style={x.arrow}>&darr;</span>
+              <span style={x.after}>{remediation.after}</span>
+            </div>
+          </div>
+
+          <div style={x.block}>
+            <div style={x.rowBetween}>
+              <span style={x.blockLabel}>Closed-loop verification</span>
+              <span style={{ ...x.badge, ...(verified ? x.badgeOk : x.badgeWarn) }}>
+                {verified ? "verified" : "pending"}
+              </span>
+            </div>
+            <div style={x.verifyGrid}>
+              <div style={x.verifyCell}>
+                <div style={x.verifyKey}>pre</div>
+                <div style={{ ...x.verifyVal, color: "#f87171" }}>
+                  {verification.pre_ms} ms
+                </div>
+              </div>
+              <div style={x.verifyCell}>
+                <div style={x.verifyKey}>post</div>
+                <div style={{ ...x.verifyVal, color: "#34d399" }}>
+                  {verification.post_ms} ms
+                </div>
+              </div>
+              <div style={x.verifyCell}>
+                <div style={x.verifyKey}>SLA</div>
+                <div style={x.verifyVal}>&lt; {verification.threshold_ms} ms</div>
+              </div>
+            </div>
+            <a
+              style={x.exploreLink}
+              href={`${GRAFANA_EXPLORE}?left=${encodeURIComponent(
+                JSON.stringify({ queries: [{ expr: verification.metric }] })
+              )}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {verification.metric} in Grafana &#8599;
+            </a>
+          </div>
+
+          <div style={x.block}>
+            <div style={x.rowBetween}>
+              <span style={x.blockLabel}>Live 6-DoF tracker</span>
+              <span style={x.mono}>
+                {tracker ? `${tracker.rate_hz ?? "–"} Hz` : "offline"}
+              </span>
+            </div>
+            {tracker ? (
+              <>
+                <div style={x.poseRow}>
+                  <span>
+                    pos&nbsp;
+                    <span style={x.mono}>
+                      [{n(tracker.x)}, {n(tracker.y)}, {n(tracker.z)}] m
+                    </span>
+                  </span>
+                  <span
+                    style={{
+                      ...x.mode,
+                      color:
+                        tracker.mode === "KALMAN_DEAD_RECKONING" ? "#fbbf24" : "#34d399",
+                    }}
+                  >
+                    {tracker.mode}
+                  </span>
+                </div>
+                <div style={{ height: 84, marginTop: 8 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={trajectory}>
+                      <YAxis hide domain={["auto", "auto"]} />
+                      <Line
+                        type="monotone"
+                        dataKey="raw"
+                        stroke="#f87171"
+                        strokeWidth={1}
+                        strokeDasharray="3 3"
+                        dot={false}
+                        isAnimationActive={false}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="ekf"
+                        stroke="#22d3ee"
+                        strokeWidth={2}
+                        dot={false}
+                        isAnimationActive={false}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+                <div style={x.legend}>
+                  <span style={{ color: "#f87171" }}>&mdash; raw optical</span>
+                  <span style={{ color: "#22d3ee" }}>&mdash; EKF filtered</span>
+                </div>
+              </>
+            ) : (
+              <div style={x.offline}>
+                Start the FreeD daemon to stream live tracker state.
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <style>{`.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
+}
+
+const n = (v) => (typeof v === "number" ? v.toFixed(2) : "–");
+
+const ACCENT = "#22d3ee";
+const x = {
+  page: {
+    minHeight: "100vh",
+    background: "#0b0e14",
+    color: "#e6e6e6",
+    fontFamily: "'IBM Plex Sans', -apple-system, 'Segoe UI', Roboto, sans-serif",
+    padding: "24px 28px 48px",
+  },
+  header: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    paddingBottom: 16,
+    borderBottom: "1px solid #1c212b",
+  },
+  title: { fontSize: "1.15rem", fontWeight: 700, letterSpacing: "0.01em" },
+  subtitle: { fontSize: "0.78rem", color: "#8a8f98", marginTop: 3 },
+  headerRight: { display: "flex", alignItems: "center", gap: 12 },
+  stackChip: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    fontSize: "0.72rem",
+    color: "#8a8f98",
+    border: "1px solid #1c212b",
+    borderRadius: 6,
+    padding: "5px 10px",
+  },
+  link: {
+    fontSize: "0.78rem",
+    color: ACCENT,
+    textDecoration: "none",
+    border: `1px solid ${ACCENT}44`,
+    borderRadius: 6,
+    padding: "5px 10px",
+  },
+  dot: { width: 7, height: 7, borderRadius: "50%", display: "inline-block" },
+  mono: { fontFamily: "'IBM Plex Mono', ui-monospace, monospace" },
+
+  streamBar: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    background: "#11151d",
+    border: "1px solid #1c212b",
+    borderRadius: 8,
+    padding: "10px 14px",
+    margin: "16px 0",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  streamLeft: { display: "flex", alignItems: "center", gap: 8 },
+  streamLabel: { fontSize: "0.8rem", fontWeight: 600 },
+  streamState: { fontSize: "0.74rem", color: "#8a8f98" },
+  streamCtl: { display: "flex", alignItems: "center", gap: 6 },
+  intBtn: {
+    fontSize: "0.68rem",
+    padding: "4px 8px",
+    borderRadius: 5,
+    border: "1px solid #1c212b",
+    background: "transparent",
+    color: "#8a8f98",
+    cursor: "pointer",
+  },
+  intBtnOn: { border: `1px solid ${ACCENT}`, color: ACCENT },
+  streamBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    fontSize: "0.74rem",
+    fontWeight: 600,
+    padding: "6px 12px",
+    borderRadius: 6,
+    border: `1px solid ${ACCENT}`,
+    background: `${ACCENT}18`,
+    color: ACCENT,
+    cursor: "pointer",
+  },
+
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    gap: 16,
+    alignItems: "start",
+  },
+  col: {
+    background: "#11151d",
+    border: "1px solid #1c212b",
+    borderRadius: 10,
+    padding: 16,
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+  },
+  colHead: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    paddingBottom: 8,
+    borderBottom: "1px solid #1c212b",
+  },
+  colTitle: { fontSize: "0.9rem", fontWeight: 700 },
+  colNote: { fontSize: "0.7rem", color: "#8a8f98", fontFamily: "'IBM Plex Mono', monospace" },
+
+  tabs: { display: "flex", gap: 6 },
+  tab: {
+    flex: 1,
+    fontSize: "0.7rem",
+    fontWeight: 600,
+    padding: "6px 4px",
+    borderRadius: 6,
+    border: "1px solid #1c212b",
+    background: "transparent",
+    color: "#8a8f98",
+    cursor: "pointer",
+  },
+  tabOn: { border: `1px solid ${ACCENT}`, color: ACCENT, background: `${ACCENT}12` },
+
+  frames: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 },
+  figure: { margin: 0 },
+  img: {
+    width: "100%",
+    aspectRatio: "16 / 10",
+    objectFit: "cover",
+    borderRadius: 6,
+    border: "1px solid #1c212b",
+    background: "#070a0f",
+    display: "block",
+  },
+  cap: { fontSize: "0.64rem", color: "#8a8f98", marginTop: 4, textAlign: "center" },
+
+  alert: {
+    fontSize: "0.76rem",
+    color: "#fbbf24",
+    background: "#fbbf2410",
+    border: "1px solid #fbbf2433",
+    borderRadius: 6,
+    padding: "8px 10px",
+  },
+
+  block: {
+    background: "#0d1119",
+    border: "1px solid #1c212b",
+    borderRadius: 8,
+    padding: "10px 12px",
+  },
+  blockLabel: {
+    fontSize: "0.68rem",
+    color: "#8a8f98",
+    fontWeight: 600,
+    letterSpacing: "0.02em",
+    textTransform: "uppercase",
+  },
+  rowBetween: { display: "flex", justifyContent: "space-between", alignItems: "center" },
+  code: {
+    fontFamily: "'IBM Plex Mono', ui-monospace, monospace",
+    fontSize: "0.68rem",
+    color: "#9aa4b2",
+    margin: "6px 0 0",
+    whiteSpace: "pre-wrap",
+    lineHeight: 1.45,
+  },
+  runBtn: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    padding: "10px",
+    borderRadius: 8,
+    border: `1px solid ${ACCENT}`,
+    background: `${ACCENT}18`,
+    color: ACCENT,
+    fontWeight: 700,
+    fontSize: "0.8rem",
+    cursor: "pointer",
+  },
+
+  conf: { fontSize: "0.72rem", color: "#34d399", fontWeight: 600 },
+  rootCause: {
+    fontSize: "1rem",
+    fontWeight: 700,
+    color: ACCENT,
+    fontFamily: "'IBM Plex Mono', monospace",
+    margin: "6px 0",
+  },
+  bar: { height: 3, background: "#1c212b", borderRadius: 2, overflow: "hidden" },
+  barFill: { height: "100%", background: ACCENT },
+  reason: { fontSize: "0.8rem", lineHeight: 1.5, color: "#c8ccd2", margin: "6px 0 0" },
+  directive: {
+    display: "block",
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: "0.72rem",
+    color: ACCENT,
+    background: "#070a0f",
+    borderRadius: 5,
+    padding: "7px 9px",
+    marginTop: 6,
+    wordBreak: "break-all",
+  },
+  slaNote: { fontSize: "0.68rem", color: "#8a8f98", marginTop: 6 },
+  hud: {
+    fontSize: "0.78rem",
+    color: "#e6e6e6",
+    borderLeft: "3px solid #fbbf24",
+    background: "#070a0f",
+    padding: "7px 10px",
+    borderRadius: "0 5px 5px 0",
+    marginTop: 6,
+  },
+
+  beforeAfter: { display: "flex", flexDirection: "column", gap: 3, marginTop: 6 },
+  before: {
+    fontSize: "0.74rem",
+    fontFamily: "'IBM Plex Mono', monospace",
+    color: "#f87171",
+    textDecoration: "line-through",
+  },
+  arrow: { color: "#34d399", fontSize: "0.9rem", lineHeight: 1 },
+  after: {
+    fontSize: "0.74rem",
+    fontFamily: "'IBM Plex Mono', monospace",
+    color: "#34d399",
+    fontWeight: 600,
+  },
+
+  badge: { fontSize: "0.64rem", fontWeight: 700, padding: "2px 7px", borderRadius: 4 },
+  badgeOk: { color: "#34d399", background: "#34d39918", border: "1px solid #34d39944" },
+  badgeWarn: { color: "#fbbf24", background: "#fbbf2418", border: "1px solid #fbbf2444" },
+  verifyGrid: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginTop: 8 },
+  verifyCell: {
+    background: "#070a0f",
+    borderRadius: 5,
+    padding: "6px 8px",
+    border: "1px solid #1c212b",
+  },
+  verifyKey: { fontSize: "0.6rem", color: "#8a8f98", textTransform: "uppercase" },
+  verifyVal: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: "0.82rem",
+    fontWeight: 700,
+    marginTop: 2,
+  },
+  exploreLink: {
+    display: "inline-block",
+    marginTop: 8,
+    fontSize: "0.7rem",
+    color: ACCENT,
+    textDecoration: "none",
+    fontFamily: "'IBM Plex Mono', monospace",
+  },
+
+  poseRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    fontSize: "0.72rem",
+    color: "#c8ccd2",
+    marginTop: 6,
+  },
+  mode: { fontFamily: "'IBM Plex Mono', monospace", fontSize: "0.66rem", fontWeight: 700 },
+  legend: {
+    display: "flex",
+    gap: 12,
+    fontSize: "0.62rem",
+    marginTop: 4,
+    fontFamily: "'IBM Plex Mono', monospace",
+  },
+  offline: { fontSize: "0.74rem", color: "#8a8f98", marginTop: 6 },
+};

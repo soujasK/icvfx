@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: stage-telemetry-event-mesh
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    streams:
+      application-id: stage-telemetry-mesh
+      bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+      properties:
+        num.stream.threads: 4
+        # 500ms window + 100ms grace, tuned to Phase 2's sliding-window spec
+        default.deserialization.exception.handler: org.apache.kafka.streams.errors.LogAndContinueExceptionHandler
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: stage-telemetry-event-mesh
+      stage_id: ${STAGE_ID:volume-a}
+
+server:
+  port: 8080
+
+# Grafana Cloud Mimir is fed by remote_write FROM a scraper (Grafana Agent /
+# Prometheus) pointed at this app's /actuator/prometheus endpoint - this
+# service does not push to Mimir directly. See
+# ../../observability/grafana-agent.river for the remote_write config.

@@ -1,0 +1,10 @@
+{"frame": 0, "camera_id": 1, "jitter_ms": 0.4, "alert": false}
+{"frame": 1, "camera_id": 1, "jitter_ms": 0.4, "alert": false}
+{"frame": 2, "camera_id": 1, "jitter_ms": 0.4, "alert": false}
+{"frame": 3, "camera_id": 1, "jitter_ms": 0.4, "alert": false}
+{"frame": 4, "camera_id": 1, "jitter_ms": 0.4, "alert": false}
+{"frame": 5, "camera_id": 1, "jitter_ms": 3.2, "alert": true}
+{"frame": 6, "camera_id": 1, "jitter_ms": 3.2, "alert": true}
+{"frame": 7, "camera_id": 1, "jitter_ms": 3.2, "alert": true}
+{"frame": 8, "camera_id": 1, "jitter_ms": 3.2, "alert": true}
+{"frame": 9, "camera_id": 1, "jitter_ms": 3.2, "alert": true}

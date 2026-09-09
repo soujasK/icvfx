@@ -1,0 +1,56 @@
+{
+  "scenario": "occlusion",
+  "alert_summary": "kinematic anomaly x31",
+  "telemetry_manifest": {
+    "window_ms": 500,
+    "camera_id": 1,
+    "kinematic_anomaly_count": 31,
+    "ptp_alert": false,
+    "jitter_p99_ms": 0.0,
+    "render_frozen": false
+  },
+  "verdict": {
+    "root_cause": "PHYSICAL_MARKER_OCCLUSION",
+    "expected_root_cause": "PHYSICAL_MARKER_OCCLUSION",
+    "classification_match": true,
+    "confidence": 0.93,
+    "reasoning": "Kinematic invariant breach (acceleration/rotation-flip) detected in the tracking stream, consistent with marker reflection or line-of-sight occlusion rather than a genuine camera move.",
+    "arbiter_backend": "mock-rule-based"
+  },
+  "remediation": {
+    "tool": "switch_tracking_estimator",
+    "args": {
+      "camera_id": 1,
+      "filter_mode": "KALMAN_DEAD_RECKONING"
+    },
+    "mcp_result": {
+      "status": "ok",
+      "action": "switch_tracking_estimator",
+      "args": {
+        "camera_id": 1,
+        "filter_mode": "KALMAN_DEAD_RECKONING"
+      },
+      "executed_at": "2026-09-09T17:05:39.265936+00:00",
+      "latency_ms": 31.0
+    },
+    "mcp_reported_latency_ms": 31.0,
+    "round_trip_s": 0.06300000000192085
+  },
+  "hud_notification": {
+    "status": "ok",
+    "action": "notify_stage_hud",
+    "args": {
+      "message": "Boom mic/actor likely occluding Rig #1 tracking markers"
+    },
+    "executed_at": "2026-09-09T17:05:39.287541+00:00",
+    "latency_ms": 0.0
+  },
+  "timing": {
+    "diagnosis_latency_s": 0.40600000000267755,
+    "total_recovery_s": 0.48400000000401633,
+    "recovery_target_s": 3.0,
+    "recovery_within_target": true,
+    "mcp_exec_target_ms": 100.0,
+    "mcp_exec_within_target": true
+  }
+}

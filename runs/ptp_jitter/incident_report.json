@@ -1,0 +1,54 @@
+{
+  "scenario": "ptp_jitter",
+  "alert_summary": "jitter alert (p99=3.2ms)",
+  "telemetry_manifest": {
+    "window_ms": 500,
+    "camera_id": 1,
+    "kinematic_anomaly_count": 0,
+    "ptp_alert": true,
+    "jitter_p99_ms": 3.2,
+    "render_frozen": false
+  },
+  "verdict": {
+    "root_cause": "PTP_CLOCK_JITTER",
+    "expected_root_cause": "PTP_CLOCK_JITTER",
+    "classification_match": true,
+    "confidence": 0.88,
+    "reasoning": "Tracked pose stayed within kinematic limits, but packet arrival jitter exceeded 2.5ms for 3+ consecutive frames - timing domain drift, not a bad tracking sample.",
+    "arbiter_backend": "mock-rule-based"
+  },
+  "remediation": {
+    "tool": "recalibrate_ptp_sync_domain",
+    "args": {
+      "domain_number": 127
+    },
+    "mcp_result": {
+      "status": "ok",
+      "action": "recalibrate_ptp_sync_domain",
+      "args": {
+        "domain_number": 127
+      },
+      "executed_at": "2026-09-09T17:05:39.434498+00:00",
+      "latency_ms": 31.0
+    },
+    "mcp_reported_latency_ms": 31.0,
+    "round_trip_s": 0.030999999995401595
+  },
+  "hud_notification": {
+    "status": "ok",
+    "action": "notify_stage_hud",
+    "args": {
+      "message": "PTP lock recovery triggered on sync domain 127"
+    },
+    "executed_at": "2026-09-09T17:05:39.457510+00:00",
+    "latency_ms": 0.0
+  },
+  "timing": {
+    "diagnosis_latency_s": 0.0940000000045984,
+    "total_recovery_s": 0.15600000000267755,
+    "recovery_target_s": 3.0,
+    "recovery_within_target": true,
+    "mcp_exec_target_ms": 100.0,
+    "mcp_exec_within_target": true
+  }
+}

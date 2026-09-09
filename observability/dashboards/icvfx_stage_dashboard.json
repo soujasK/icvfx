@@ -1,0 +1,131 @@
+{
+  "title": "ICVFX Stage Sync - Mission Control",
+  "uid": "icvfx-stage-sync",
+  "tags": ["icvfx", "virtual-production", "stage-sync"],
+  "timezone": "utc",
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "FreeD Packet Jitter (P99) vs 1.0ms SLA Target",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "freed_packet_jitter_seconds",
+          "legendFormat": "camera {{camera_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.001 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "PTP Grandmaster Clock Offset (ns)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "freed_ptp_offset_nanoseconds or ptp_grandmaster_offset_nanoseconds",
+          "legendFormat": "domain {{domain}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ns",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 500 },
+              { "color": "red", "value": -500 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Kinematic Jerk Violations (Sensor Occlusion Breaches)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "freed_kinematic_jerk_violations_total or kinematic_jerk_violations_total or vector(0)",
+          "legendFormat": "camera {{camera_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Active Stage Sync Alert Status",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "max(max_over_time(freed_packet_jitter_seconds[3m])) > bool 0.0025"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "NOMINAL (SYNCED)", "color": "green" } } },
+            { "type": "value", "options": { "1": { "text": "DESYNC ALERT", "color": "red" } } }
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "6-DoF Extended Kalman Filter Covariance ||P||",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "targets": [
+        {
+          "expr": "freed_ekf_covariance_trace",
+          "legendFormat": "EKF State ||P||"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 0.5,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.15 }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

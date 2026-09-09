@@ -1,0 +1,63 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: icvfx-stage-sync
+    folder: ICVFX Stage Sync
+    interval: 10s
+    rules:
+      - uid: freed-jitter-desync-alert
+        title: "FreeD packet jitter exceeds 2.5ms (3+ consecutive frames)"
+        condition: C
+        for: 0s
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 180
+              to: 0
+            datasourceUid: grafanacloud-mimir
+            model:
+              expr: max_over_time(freed_packet_jitter_seconds[3m])
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 180
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.0025]
+        labels:
+          severity: critical
+          subsystem: tracker-sync
+        annotations:
+          summary: "Camera {{ $labels.camera_id }} jitter above 2.5ms threshold for 3+ consecutive frames"
+          runbook_url: "https://internal.example/runbooks/icvfx-desync"
+
+contactPoints:
+  - orgId: 1
+    name: gemini-incident-arbiter
+    receivers:
+      - uid: gemini-arbiter-webhook
+        type: webhook
+        settings:
+          url: http://incident-arbiter:8090/alert
+          httpMethod: POST
+
+policies:
+  - orgId: 1
+    receiver: gemini-incident-arbiter
+    group_by: ["camera_id"]
+    matchers:
+      - subsystem = tracker-sync
+    group_wait: 0s
+    group_interval: 1s
+    repeat_interval: 30s
