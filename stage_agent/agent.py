@@ -55,6 +55,32 @@ remediation_toolset = _McpToolset(
     ),
 )
 
+import shutil
+npx_cmd = shutil.which("npx") or ("npx.cmd" if os.name == "nt" else "npx")
+
+grafana_url = os.environ.get("GRAFANA_CLOUD_REMOTE_WRITE_URL", "")
+# Strip suffix to get base URL if needed, or assume it's the base URL
+if "/api/prom/push" in grafana_url:
+    grafana_url = grafana_url.split("/api/prom/push")[0]
+elif not grafana_url:
+    grafana_url = "https://nimblespruce925.grafana.net"
+
+grafana_toolset = _McpToolset(
+    connection_params=StdioConnectionParams(
+        server_params=StdioServerParameters(
+            command=npx_cmd,
+            args=["-y", "@leval/mcp-grafana"],
+            cwd=_REPO,
+            env={
+                **os.environ,
+                "GRAFANA_URL": grafana_url,
+                "GRAFANA_TOKEN": os.environ.get("GRAFANA_CLOUD_API_KEY", ""),
+            }
+        ),
+        timeout=30,
+    ),
+)
+
 root_agent = LlmAgent(
     model=MODEL,
     name="stage_incident_commander",
@@ -64,5 +90,5 @@ root_agent = LlmAgent(
         "MCP remediation and notifies the crew."
     ),
     instruction=SYSTEM_INSTRUCTION,
-    tools=[remediation_toolset],
+    tools=[remediation_toolset, grafana_toolset],
 )

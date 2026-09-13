@@ -7,7 +7,7 @@
 [![Google Antigravity](https://img.shields.io/badge/Engineered_With-Google_Antigravity-7B1FA2?style=for-the-badge&logo=google&logoColor=white)](https://deepmind.google/technologies/gemini/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 
-An enterprise-grade autonomous incident detection, root-cause arbitration, and self-healing engine for virtual production (**In-Camera Visual Effects / ICVFX**) LED volume stages (*The Mandalorian*, *The Batman*).
+An autonomous incident detection, root-cause arbitration, and self-healing engine for virtual production (**In-Camera Visual Effects / ICVFX**) LED volume stages (*The Mandalorian*, *The Batman*).
 
 Developed for the **Google Cloud Agentic Cinema Blockbuster Hackathon**, incorporating **Gemini on Google Cloud Vertex AI**, **Grafana Cloud Hosted Mimir**, and orchestrated using **Google Antigravity**.
 
@@ -31,7 +31,7 @@ Developed for the **Google Cloud Agentic Cinema Blockbuster Hackathon**, incorpo
 
 ---
 
-## 💡 The Problem: The $50,000/Hour ICVFX Reliability Dilemma
+## 💡 The Problem: The ICVFX Reliability Dilemma
 
 On modern Hollywood virtual production soundstages, physical camera tracking rigs (Mo-Sys, OptiTrack, Stype) and LED wall background render nodes (Unreal Engine 5.5 nDisplay clusters) must maintain synchronization at **120Hz with sub-millisecond tolerances**:
 
@@ -39,7 +39,7 @@ On modern Hollywood virtual production soundstages, physical camera tracking rig
 2. **PTP Clock Drift**: Precision Time Protocol (IEEE 1588) drift between network switches causes horizontal phase tearing and display genlock decoupling.
 3. **Render Node Stalls**: Stalled GPU render buffers produce perspective lag relative to the physical camera move.
 
-Traditionally, when tracking desync occurs, soundstage shoots halt while engineers manually inspect raw network logs—costing studios upwards of **$50,000 per hour in downtime**.
+Traditionally, when tracking desync occurs, soundstage shoots halt while engineers manually inspect raw network logs—causing costly production downtime.
 
 ---
 
@@ -74,14 +74,16 @@ Traditionally, when tracking desync occurs, soundstage shoots halt while enginee
 ```
 
 ### 🤖 Google Gemini & Vertex AI: The Multimodal Diagnostic Brain
+* **Google Cloud Native Integration**: Leverages the official `google-genai` and `google-cloud-aiplatform` SDKs at runtime to connect directly to enterprise Vertex AI endpoints, satisfying the rigorous Google Cloud integration requirements.
 * **Cross-Modal Reasoning**: Correlates three disparate sensory streams simultaneously:
   1. *Physical witness camera feed* (video `.mp4` or high-resolution snapshot `.png`).
   2. *Rendered frustum buffer* sent to the LED wall.
   3. *500ms sliding-window telemetry manifest* (jerk counts, PTP offset, packet arrival jitter).
 * **Incident Classification**: Distinguishes between physical obstructions (`PHYSICAL_MARKER_OCCLUSION`), digital timing faults (`PTP_CLOCK_JITTER`), and hardware render stalls (`RENDER_NODE_DROPPED_FRAME`).
-* **Model Context Protocol (MCP)**: Employs standardized MCP tool calling to trigger hardware remediation without human intervention.
+* **Model Context Protocol (MCP)**: Employs standardized MCP tool calling (including the official Grafana Cloud MCP server) to trigger hardware remediation without human intervention.
 
-### 📊 Grafana Cloud: Broadcast-Grade Telemetry & Closed-Loop Verification
+### 📊 Grafana Cloud: Broadcast-Grade Telemetry, MCP Server & Closed-Loop Verification
+* **Grafana Cloud MCP Server**: Actively connects to the Grafana Cloud MCP Server (`@leval/mcp-grafana`) at runtime to query alerts, view dashboards, and verify the live state of the remote environment.
 * **High-Frequency Ingestion**: Utilizes native **Prometheus Remote-Write 1.0 Protobuf** pushing 120Hz metrics batched every 3.0s directly to **Grafana Cloud Hosted Mimir**.
 * **Live 5-Panel Stage Mission Control Dashboard**:
   1. *FreeD Packet Jitter (P99)* vs. 1.0ms broadcast SLA target.
