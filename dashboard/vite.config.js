@@ -194,6 +194,15 @@ export default defineConfig({
                 } catch (imgErr) {
                   console.warn('Image base64 decode warning:', imgErr);
                 }
+              } else if (body.image_path && typeof body.image_path === 'string') {
+                const rawP = body.image_path.replace(/^[/\\]+/, '');
+                let candidate = path.join(REPO_ROOT, rawP);
+                if (!fs.existsSync(candidate)) {
+                  candidate = path.join(__dirname, 'public', rawP);
+                }
+                if (fs.existsSync(candidate)) {
+                  args.push('--witness_image', candidate);
+                }
               }
 
               const py = spawn('python', args, {

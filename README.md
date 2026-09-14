@@ -80,7 +80,7 @@ Traditionally, when tracking desync occurs, soundstage shoots halt while enginee
   2. *Rendered frustum buffer* sent to the LED wall.
   3. *500ms sliding-window telemetry manifest* (jerk counts, PTP offset, packet arrival jitter).
 * **Incident Classification**: Distinguishes between physical obstructions (`PHYSICAL_MARKER_OCCLUSION`), digital timing faults (`PTP_CLOCK_JITTER`), and hardware render stalls (`RENDER_NODE_DROPPED_FRAME`).
-* **Model Context Protocol (MCP)**: Employs standardized MCP tool calling (including the official Grafana Cloud MCP server) to trigger hardware remediation without human intervention.
+* **Model Context Protocol (MCP)**: Employs standardized MCP tool calling — including a Grafana MCP server (`@leval/mcp-grafana`, run via `npx`) for live Grafana Cloud context — to trigger hardware remediation without human intervention.
 
 ### 📊 Grafana Cloud: Broadcast-Grade Telemetry, MCP Server & Closed-Loop Verification
 * **Grafana Cloud MCP Server**: Actively connects to the Grafana Cloud MCP Server (`@leval/mcp-grafana`) at runtime to query alerts, view dashboards, and verify the live state of the remote environment.
@@ -117,11 +117,18 @@ Unlike simple wrapper projects that wrap text-based LLMs in chat windows, this p
 | :--- | :--- | :--- | :---: |
 | **Google Cloud (Gemini 2.5 Pro)** | `google-genai 1.0+` | Multimodal Vision & Incident Root-Cause Diagnosis | **COMPULSORY CORE** |
 | **Grafana Labs Observability** | Grafana 11+ / Mimir | Telemetry Scraping, Prometheus Remote-Write & Alerting Webhooks | **COMPULSORY CORE** |
-| **Model Context Protocol (MCP)** | `mcp 1.2+` | Deterministic Stage Remediation & Hardware Control Tools | **COMPULSORY CORE** |
+| **Model Context Protocol (MCP)** | `mcp 1.2+, <2` | Deterministic Stage Remediation & Hardware Control Tools | **COMPULSORY CORE** |
 | **Python Runtime** | `Python 3.10+` | Orchestrator, Arbiter, and MCP Server Execution | **COMPULSORY** |
 | **C++ Compiler** | `C++20` (`g++`, `clang++`, MinGW) | Low-Latency FreeD Telemetry Ingest Daemon | Included *(With Python edge fallback)* |
-| **Node.js & npm** | `Node 18+` & `npm 9+` | React Stage Mission Control GUI | Included *(With pre-built static bundle)* |
+| **Node.js & npm** | `Node 18+` & `npm 9+` | React Stage Mission Control GUI; also runs the Grafana MCP server via `npx` | Included *(With pre-built static bundle)* |
 | **Docker Desktop** | `20.10+` | Local Grafana, Mimir, Loki, & Tempo Container Stack | Included *(With Cloud remote-write)* |
+| **ffmpeg** | any recent build, on `PATH` | Video ingest/remediation (`orchestrator/video_remediator.py`); already baked into the Cloud Run image | **COMPULSORY** *(for the video-ingest path only)* |
+| **`google-adk`** (pip) | `google-adk 2.x` | The Stage Incident Commander agent (`stage_agent/`) — see "Option E" below | **COMPULSORY** *(for the agent path — see note below)* |
+| **Google Cloud SDK (`gcloud`)** | current | Auth + Vertex AI API enablement for the Vertex/ADK path | **COMPULSORY** *(for Vertex/ADK — see note below)* |
+| **WSL2** (Windows only) | Ubuntu 22.04+ | The C++ core ships pre-built as Linux ELF binaries and will **not** run on native Windows (`WinError 193`); Option A silently falls back to synthetic telemetry on Windows without WSL | Recommended on Windows |
+| **Java 17 + Maven** (optional) | — | `telemetry-mesh/` (Spring Boot + Kafka Streams) — complete source, not required by any Quickstart option, not exercised by this build (no Kafka broker in CI) | Optional / not required |
+
+> **`mcp` version note:** if you `pip install` `mcp-remediation/requirements.txt` into the *same* environment you install `google-adk` into, install `google-adk` first (or pin `mcp<2` explicitly) — `google-adk` needs `mcp>=1.24,<2`, and an unconstrained `pip install mcp` can resolve `mcp 2.x`, which breaks ADK's MCP toolset (`ModuleNotFoundError: mcp.shared.session`). `stage_agent/requirements.txt` pins this correctly; use it for the agent path.
 
 ---
 
@@ -137,8 +144,10 @@ All credentials and settings are read dynamically via environment variables with
 | `GEMINI_MODEL` | **Google Cloud** | Gemini Model (`gemini-2.5-pro` / `gemini-2.5-flash`) | Optional *(Defaults to `gemini-2.5-pro`)* |
 | `GRAFANA_CLOUD_REMOTE_WRITE_URL` | **Grafana Labs** | Prometheus Remote-Write URL (Grafana Cloud Mimir / Local Mimir) | **COMPULSORY** |
 | `GRAFANA_CLOUD_USER` | **Grafana Labs** | Grafana Instance User ID / Username | **COMPULSORY** |
-| `GRAFANA_CLOUD_API_KEY` | **Grafana Labs** | Grafana API / Access Token | **COMPULSORY** |
+| `GRAFANA_CLOUD_API_KEY` | **Grafana Labs** | Grafana API / Access Token; also reused as the `GRAFANA_TOKEN` for the Grafana MCP server (see Option E) | **COMPULSORY** |
 | `ICVFX_FORCE_MOCK_ARBITER` | **Testing** | Set to `1` to run offline fallback mode for local testing | Optional *(Defaults to `0`)* |
+| `GOOGLE_GENAI_USE_VERTEXAI` | **Google Cloud (ADK agent)** | Set to `TRUE` so the ADK agent (`stage_agent/`) calls Gemini via Vertex AI instead of the API key | **COMPULSORY** *(for Option E)* |
+| `STAGE_AGENT_MODEL` | **Google Cloud (ADK agent)** | Model for the Stage Incident Commander agent | Optional *(Defaults to `gemini-2.5-pro`)* |
 
 ---
 
@@ -177,10 +186,39 @@ Launch the interactive **Stage Mission Control React GUI**:
 # 1. Build React Frontend
 cd dashboard && npm install && npm run build && cd ..
 
-# 2. Launch Serverless Backend
+# 2. Install the FastAPI backend's dependencies (fastapi, uvicorn, cramjam, opencv, etc.)
+pip install -r requirements.txt
+
+# 3. Launch Serverless Backend
 python serverless_app.py
 ```
-Open **`http://localhost:8080`** in your browser.
+Open **`http://localhost:8080`** in your browser. `ffmpeg` must be on `PATH` for the video-ingest panel (see System Requirements above); everything else degrades gracefully without cloud credentials.
+
+### Option E: Run the ADK Agent (Google Cloud Agent Builder + Grafana MCP)
+Runs the actual agentic path: a Gemini **ADK** (`LlmAgent`) agent on **Vertex AI** that reasons over the witness/frustum frames + telemetry, then calls two live **MCP** toolsets — the remediation server in `mcp-remediation/` and the **Grafana MCP server** (`@leval/mcp-grafana`, via `npx`) for live alert/metric context and closed-loop verification.
+
+```bash
+# 1. Authenticate to Google Cloud (one-time; opens a browser)
+gcloud auth login
+gcloud auth application-default login
+gcloud config set project <YOUR_PROJECT_ID>
+gcloud services enable aiplatform.googleapis.com
+
+# 2. Install the agent's dependencies - use a separate venv from Options A-D
+#    to avoid the mcp 1.x/2.x conflict noted above
+python -m venv .venv-agent
+# Windows: .venv-agent\Scripts\activate      Linux/macOS/WSL: source .venv-agent/bin/activate
+pip install -r stage_agent/requirements.txt
+
+# 3. Configure stage_agent/.env (copy from stage_agent/.env.example)
+#    GOOGLE_GENAI_USE_VERTEXAI=TRUE
+#    GOOGLE_CLOUD_PROJECT=<your-project-id>
+#    GOOGLE_CLOUD_LOCATION=us-central1
+
+# 4. Run one incident through the agent end-to-end
+python run_agent.py --scenario occlusion
+```
+Prints the full step-by-step trace: every tool call (Grafana MCP reads + remediation MCP writes), every tool result, and the agent's final diagnosis. Needs Node.js/`npx` on `PATH` (installs the Grafana MCP server on first run) and a Grafana Cloud API key in `GRAFANA_CLOUD_API_KEY`.
 
 ---
 

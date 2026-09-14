@@ -1,0 +1,14 @@
+# Stage Incident Commander (ADK agent) dependencies.
+# Install into a separate venv from Options A-D's requirements files - see
+# the "mcp version note" in the root README.
+
+google-adk>=2.0.0,<3.0.0
+
+# google-adk's MCPToolset needs mcp<2 (breaks on 2.x: ModuleNotFoundError:
+# mcp.shared.session). Pin explicitly so install order can't smuggle in 2.x.
+mcp>=1.24.0,<2.0.0
+
+google-genai>=1.0.0
+python-dotenv>=1.0.0
+Pillow>=10.0.0
+numpy>=1.24.0
