@@ -31,15 +31,21 @@ Developed for the **Google Cloud Agentic Cinema Blockbuster Hackathon**, incorpo
 
 ---
 
-## 💡 The Problem: The ICVFX Reliability Dilemma
+## 🎬 The Story: When the Wall Lies to the Camera
 
-On modern Hollywood virtual production soundstages, physical camera tracking rigs (Mo-Sys, OptiTrack, Stype) and LED wall background render nodes (Unreal Engine 5.5 nDisplay clusters) must maintain synchronization at **120Hz with sub-millisecond tolerances**:
+Virtual production changed how blockbusters get made. Instead of green screen and months of post, shows like *The Mandalorian* and *The Batman* shoot final-pixel backgrounds **live, in camera**, on a curved LED volume — "the wall." A tracked camera moves through the physical set; a render cluster paints the matching background onto the wall in real time; the two have to agree, frame for frame, at **120Hz, to a fraction of a millisecond**.
 
-1. **Optical Marker Occlusion**: When boom mics, actors, or camera cranes cross tracking sensor lines of sight, tracking judders violently, shearing the perspective frustum on the LED wall.
-2. **PTP Clock Drift**: Precision Time Protocol (IEEE 1588) drift between network switches causes horizontal phase tearing and display genlock decoupling.
-3. **Render Node Stalls**: Stalled GPU render buffers produce perspective lag relative to the physical camera move.
+When they stop agreeing, it isn't something you fix in post — **it is the shot**. The horizon swims against the actor's move, a reflection lands a frame behind, the parallax tears. The AD calls cut. A volume stage runs into the tens of thousands of dollars a day, fifty-plus crew standing by while an engineer scrolls raw network logs trying to work out *why the wall just lied to the camera*.
 
-Traditionally, when tracking desync occurs, soundstage shoots halt while engineers manually inspect raw network logs—causing costly production downtime.
+That diagnosis is manual today — and worse, it's a guess between three faults that look identical on the wall but demand completely different fixes:
+
+1. **Optical marker occlusion** — a boom pole, an actor, or the crane itself blocks the tracking sensors' line of sight; the tracked pose judders and the frustum shears.
+2. **PTP clock drift** — the network clock (IEEE 1588) between camera and render node slips; the wall shows horizontal phase tearing even though the camera move itself is smooth.
+3. **Render node stalls** — the GPU render buffer freezes a frame behind; the wall lags the physical camera.
+
+Guess wrong on set and you "fix" the wrong subsystem while the meter keeps running.
+
+**This project puts an agent in that decision loop instead of a person making a judgment call under pressure.** It watches the same telemetry a stage engineer would, looks at the same witness-camera frame, reasons about which of the three faults actually happened — using Gemini's multimodal understanding, not a lookup table — then *acts*: it calls the exact remediation a human engineer would have called, over a real protocol (MCP), in milliseconds instead of minutes, and checks its own work against Grafana Cloud before handing the stage back.
 
 ---
 
@@ -92,6 +98,23 @@ Traditionally, when tracking desync occurs, soundstage shoots halt while enginee
   4. *Active Stage Sync Alert Status* (Stat widget tripping to red `DESYNC ALERT` on $> 2.5\text{ms}$ jitter).
   5. *6-DoF Extended Kalman Filter Covariance Trace* $\Vert P \Vert$ gauge ($0.0130$ nominal).
 * **Closed-Loop Verification**: When Gemini prescribes a fix, the engine polls Prometheus metrics to mathematically verify that packet jitter dropped back below the $1.0\text{ms}$ SLA threshold before returning stage control.
+
+### 🔧 MCP Tool Surface — What the Agent Can Actually Do
+The agent doesn't just talk about fixing the stage — every diagnosis ends in a real protocol call. Two MCP toolsets are wired into the ADK agent (`stage_agent/agent.py`) over stdio:
+
+**Remediation server** — this repo's own MCP server (`mcp-remediation/server.py`):
+
+| Tool | Arguments | What it does |
+| :--- | :--- | :--- |
+| `switch_tracking_estimator` | `camera_id`, `filter_mode` | Switches a camera's Kalman-filter profile to predictive dead-reckoning during marker occlusion |
+| `recalibrate_ptp_sync_domain` | `domain_number` | Triggers PTP lock recovery on the stage's timing domain |
+| `clamp_frustum_margin` | `display_node_id`, `overscan_pct` | Expands render frustum overscan to mask a stalled/frozen render frame |
+| `notify_stage_hud` | `message` | Pushes a status line to the stage crew's viewfinder HUD |
+| `verify_stage_recovery` | — | Closes the loop: re-checks telemetry after a fix executes |
+
+Every call is argument-validated (out-of-range values are rejected, not silently applied), recorded to an atomic audit log (`mcp-remediation/stage_state.json` under a threading lock — safe under concurrent incidents), and timed; remediation consistently lands under the 100ms execution budget.
+
+**Grafana MCP server** (`@leval/mcp-grafana`, launched via `npx`) — gives the agent live read access to Grafana Cloud: active alerts, the current value of `freed_packet_jitter_seconds`, dashboard state. Called both *before* a diagnosis (live context) and *after* a remediation (proof it actually worked) — see "Option E" in the Quickstart section below to run it yourself.
 
 ---
 
